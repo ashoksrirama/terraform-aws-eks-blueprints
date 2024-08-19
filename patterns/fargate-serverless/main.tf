@@ -28,7 +28,13 @@ provider "helm" {
   }
 }
 
-data "aws_availability_zones" "available" {}
+data "aws_availability_zones" "available" {
+  # Do not include local zones
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
 
 locals {
   name     = basename(path.cwd)
@@ -50,11 +56,15 @@ locals {
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.16"
+  version = "~> 20.11"
 
   cluster_name                   = local.name
-  cluster_version                = "1.27"
+  cluster_version                = "1.30"
   cluster_endpoint_public_access = true
+
+  # Give the Terraform identity admin access to the cluster
+  # which will allow resources to be deployed into the cluster
+  enable_cluster_creator_admin_permissions = true
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
@@ -92,7 +102,7 @@ module "eks" {
 
 module "eks_blueprints_addons" {
   source  = "aws-ia/eks-blueprints-addons/aws"
-  version = "~> 1.0"
+  version = "~> 1.16"
 
   cluster_name      = module.eks.cluster_name
   cluster_endpoint  = module.eks.cluster_endpoint
@@ -116,13 +126,13 @@ module "eks_blueprints_addons" {
         resources = {
           limits = {
             cpu = "0.25"
-            # We are targetting the smallest Task size of 512Mb, so we subtract 256Mb from the
+            # We are targeting the smallest Task size of 512Mb, so we subtract 256Mb from the
             # request/limit to ensure we can fit within that task
             memory = "256M"
           }
           requests = {
             cpu = "0.25"
-            # We are targetting the smallest Task size of 512Mb, so we subtract 256Mb from the
+            # We are targeting the smallest Task size of 512Mb, so we subtract 256Mb from the
             # request/limit to ensure we can fit within that task
             memory = "256M"
           }

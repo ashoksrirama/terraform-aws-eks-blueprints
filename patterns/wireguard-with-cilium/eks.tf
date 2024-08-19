@@ -4,11 +4,15 @@
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.16"
+  version = "~> 20.11"
 
   cluster_name                   = local.name
-  cluster_version                = "1.28"
+  cluster_version                = "1.30"
   cluster_endpoint_public_access = true
+
+  # Give the Terraform identity admin access to the cluster
+  # which will allow resources to be deployed into the cluster
+  enable_cluster_creator_admin_permissions = true
 
   # EKS Addons
   cluster_addons = {
@@ -60,7 +64,7 @@ output "configure_kubectl" {
 
 module "eks_blueprints_addons" {
   source  = "aws-ia/eks-blueprints-addons/aws"
-  version = "~> 1.7"
+  version = "~> 1.16"
 
   cluster_name      = module.eks.cluster_name
   cluster_endpoint  = module.eks.cluster_endpoint

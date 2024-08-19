@@ -8,28 +8,19 @@ provider "kubernetes" {
   token                  = data.aws_eks_cluster_auth.this.token
 }
 
-provider "helm" {
-  kubernetes {
-    host                   = module.eks.cluster_endpoint
-    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-    token                  = data.aws_eks_cluster_auth.this.token
-  }
-}
-
-provider "kubectl" {
-  apply_retry_count      = 10
-  host                   = module.eks.cluster_endpoint
-  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-  load_config_file       = false
-  token                  = data.aws_eks_cluster_auth.this.token
-}
-
 data "aws_eks_cluster_auth" "this" {
   name = module.eks.cluster_name
 }
 
 data "aws_caller_identity" "current" {}
-data "aws_availability_zones" "available" {}
+
+data "aws_availability_zones" "available" {
+  # Do not include local zones
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
 
 locals {
   name   = basename(path.cwd)
@@ -50,10 +41,10 @@ locals {
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.16"
+  version = "~> 19.21"
 
   cluster_name                   = local.name
-  cluster_version                = "1.27"
+  cluster_version                = "1.29"
   cluster_endpoint_public_access = true
 
   vpc_id     = module.vpc.vpc_id
@@ -174,7 +165,7 @@ module "eks_blueprints_dev_teams" {
 }
 
 ################################################################################
-# Supporting Resoruces
+# Supporting Resources
 ################################################################################
 
 module "vpc" {

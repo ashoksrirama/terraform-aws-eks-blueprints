@@ -2,7 +2,13 @@ provider "aws" {
   region = local.region
 }
 
-data "aws_availability_zones" "available" {}
+data "aws_availability_zones" "available" {
+  # Do not include local zones
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
 
 locals {
   name   = basename(path.cwd)
@@ -21,13 +27,12 @@ locals {
 # Cluster
 ################################################################################
 
-#tfsec:ignore:aws-eks-enable-control-plane-logging
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.13"
+  version = "~> 20.11"
 
   cluster_name                   = local.name
-  cluster_version                = "1.27"
+  cluster_version                = "1.30"
   cluster_endpoint_public_access = true
 
   # EKS Addons

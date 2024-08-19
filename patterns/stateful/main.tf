@@ -29,7 +29,14 @@ provider "helm" {
 }
 
 data "aws_caller_identity" "current" {}
-data "aws_availability_zones" "available" {}
+
+data "aws_availability_zones" "available" {
+  # Do not include local zones
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
+  }
+}
 
 locals {
   name   = basename(path.cwd)
@@ -55,11 +62,15 @@ locals {
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 19.16"
+  version = "~> 20.11"
 
   cluster_name                   = local.name
-  cluster_version                = "1.27"
+  cluster_version                = "1.30"
   cluster_endpoint_public_access = true
+
+  # Give the Terraform identity admin access to the cluster
+  # which will allow resources to be deployed into the cluster
+  enable_cluster_creator_admin_permissions = true
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
@@ -105,45 +116,50 @@ module "eks" {
       }
 
       # This user data mounts the containerd directories to the second EBS volume which
-      # is dedicated to just contianerd. You can read more about the practice and why
+      # is dedicated to just containerd. You can read more about the practice and why
       # here https://aws.github.io/aws-eks-best-practices/scalability/docs/data-plane/#use-multiple-ebs-volumes-for-containers
       # and https://github.com/containerd/containerd/blob/main/docs/ops.md#base-configuration
-      pre_bootstrap_user_data = <<-EOT
-        # Wait for second volume to attach before trying to mount paths
-        TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-        EC2_INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -v http://169.254.169.254/latest/meta-data/instance-id)
-        DATA_STATE="unknown"
-        until [ "$${DATA_STATE}" == "attached" ]; do
-          DATA_STATE=$(aws ec2 describe-volumes \
-            --region ${local.region} \
-            --filters \
-                Name=attachment.instance-id,Values=$${EC2_INSTANCE_ID} \
-                Name=attachment.device,Values=${local.second_volume_name} \
-            --query Volumes[].Attachments[].State \
-            --output text)
-          sleep 5
-        done
+      cloudinit_pre_nodeadm = [
+        {
+          content_type = "text/x-shellscript"
+          content      = <<-EOT
+            # Wait for second volume to attach before trying to mount paths
+            TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+            EC2_INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -v http://169.254.169.254/latest/meta-data/instance-id)
+            DATA_STATE="unknown"
+            until [ "$${DATA_STATE}" == "attached" ]; do
+              DATA_STATE=$(aws ec2 describe-volumes \
+                --region ${local.region} \
+                --filters \
+                    Name=attachment.instance-id,Values=$${EC2_INSTANCE_ID} \
+                    Name=attachment.device,Values=${local.second_volume_name} \
+                --query Volumes[].Attachments[].State \
+                --output text)
+              sleep 5
+            done
 
-        # Get the volume ID
-        VOLUME_ID=$(aws ec2 describe-volumes \
-          --region ${local.region} \
-          --filters \
-              Name=attachment.instance-id,Values=$${EC2_INSTANCE_ID} \
-              Name=attachment.device,Values=${local.second_volume_name} \
-          --query Volumes[].Attachments[].VolumeId \
-          --output text | sed 's/-//')
+            # Get the volume ID
+            VOLUME_ID=$(aws ec2 describe-volumes \
+              --region ${local.region} \
+              --filters \
+                  Name=attachment.instance-id,Values=$${EC2_INSTANCE_ID} \
+                  Name=attachment.device,Values=${local.second_volume_name} \
+              --query Volumes[].Attachments[].VolumeId \
+              --output text | sed 's/-//')
 
-        # Mount the containerd directories to the 2nd volume
-        SECOND_VOL=$(lsblk -o NAME,SERIAL -d |awk -v id="$${VOLUME_ID}" '$2 ~ id {print $1}')
-        systemctl stop containerd
-        mkfs -t ext4 /dev/$${SECOND_VOL}
-        rm -rf /var/lib/containerd/*
-        rm -rf /run/containerd/*
+            # Mount the containerd directories to the 2nd volume
+            SECOND_VOL=$(lsblk -o NAME,SERIAL -d |awk -v id="$${VOLUME_ID}" '$2 ~ id {print $1}')
+            systemctl stop containerd
+            mkfs -t ext4 /dev/$${SECOND_VOL}
+            rm -rf /var/lib/containerd/*
+            rm -rf /run/containerd/*
 
-        mount /dev/$${SECOND_VOL} /var/lib/containerd/
-        mount /dev/$${SECOND_VOL} /run/containerd/
-        systemctl start containerd
-      EOT
+            mount /dev/$${SECOND_VOL} /var/lib/containerd/
+            mount /dev/$${SECOND_VOL} /run/containerd/
+            systemctl start containerd
+          EOT
+        }
+      ]
     }
 
     instance-store = {
@@ -168,20 +184,20 @@ module "eks" {
         }
       }
 
-      # NVMe instance store volumes are automatically enumerated and assigned a device
-      pre_bootstrap_user_data = <<-EOT
-        cat <<-EOF > /etc/profile.d/bootstrap.sh
-        #!/bin/sh
-
-        # Configure NVMe volumes in RAID0 configuration
-        # https://github.com/awslabs/amazon-eks-ami/blob/056e31f8c7477e893424abce468cb32bbcd1f079/files/bootstrap.sh#L35C121-L35C126
-        # Mount will be: /mnt/k8s-disks
-        export LOCAL_DISKS='raid0'
-        EOF
-
-        # Source extra environment variables in bootstrap script
-        sed -i '/^set -o errexit/a\\nsource /etc/profile.d/bootstrap.sh' /etc/eks/bootstrap.sh
-      EOT
+      cloudinit_pre_nodeadm = [
+        {
+          content_type = "application/node.eks.aws"
+          content      = <<-EOT
+            ---
+            apiVersion: node.eks.aws/v1alpha1
+            kind: NodeConfig
+            spec:
+              instance:
+                localStorage:
+                  strategy: RAID0
+          EOT
+        }
+      ]
     }
   }
 
@@ -194,7 +210,7 @@ module "eks" {
 
 module "eks_blueprints_addons" {
   source  = "aws-ia/eks-blueprints-addons/aws"
-  version = "~> 1.0"
+  version = "~> 1.16"
 
   cluster_name      = module.eks.cluster_name
   cluster_endpoint  = module.eks.cluster_endpoint
@@ -322,7 +338,6 @@ module "vpc" {
   tags = local.tags
 }
 
-#tfsec:ignore:*
 module "velero_backup_s3_bucket" {
   source  = "terraform-aws-modules/s3-bucket/aws"
   version = "~> 3.0"
@@ -377,7 +392,7 @@ module "efs" {
   security_group_vpc_id      = module.vpc.vpc_id
   security_group_rules = {
     vpc = {
-      # relying on the defaults provdied for EFS/NFS (2049/TCP + ingress)
+      # relying on the defaults provided for EFS/NFS (2049/TCP + ingress)
       description = "NFS ingress from VPC private subnets"
       cidr_blocks = module.vpc.private_subnets_cidr_blocks
     }

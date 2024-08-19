@@ -15,25 +15,9 @@ terraform apply -target=module.eventbridge -target=module.nlb --auto-approve
 terraform apply --auto-approve
 ```
 
-Once the pattern has successfully deployed, you will be provided with multiple
-output values.
-
-Review the output value for `cluster_endpoint_private`, it should look similar
-to snippet below:
-
-```sh
-aws eks update-cluster-config \
---region us-west-2 \
---name privatelink-access \
---resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true
-```
-
-Copy the command and run it in a terminal session to take cluster API
-endpoint private.
-
 ## Test access to EKS Kubernetes API server endpoint
 
-Of the other output values, the value `ssm_test` is provided to aid in quickly
+Of the output values, the value `ssm_test` is provided to aid in quickly
 testing the connectivity from the client EC2 instance to the private EKS cluster
 via AWS PrivateLink. Copy the output value, which looks like the snippet shown
 below (as an example) and paste it into your terminal to execute and check the
@@ -90,28 +74,11 @@ kubectl get pods -A
 NAMESPACE     NAME                       READY   STATUS    RESTARTS   AGE
 kube-system   aws-node-4f8g8             1/1     Running   0          1m
 kube-system   coredns-6ff9c46cd8-59sqp   1/1     Running   0          1m
-kube-system   coredns-6ff9c46cd8-svnpb   1/1     Running   0          2m
+kube-system   coredns-6ff9c46cd8-1npb   1/1     Running   0          2m
 kube-system   kube-proxy-mm2zc           1/1     Running   0          1m
 ```
 
 ## Destroy
-
-Before we could destroy/teardown all the resources created, we need to ensure
-that the cluster state is restored for the Terraform to do a complete cleanup.
-This would mean that we make cluster API endpoint public again.
-
-Review the output value for `cluster_endpoint_public`, it should look similar
-to snippet below:
-
-```sh
-aws eks update-cluster-config \
---region us-west-2 \
---name privatelink-access \
---resources-vpc-config endpointPublicAccess=true,endpointPrivateAccess=true
-```
-
-Copy the command and run it in a terminal session to take cluster API
-endpoint public.
 
 {%
    include-markdown "../../docs/_partials/destroy.md"

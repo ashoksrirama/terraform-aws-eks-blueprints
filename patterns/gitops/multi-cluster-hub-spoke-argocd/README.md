@@ -1,6 +1,6 @@
 # Multi-Cluster centralized hub-spoke topology
 
-This tutorial guides you through deploying an Amazon EKS cluster with addons configured via ArgoCD in a Multi-Cluster Hub-Spoke topoloy, employing the [GitOps Bridge Pattern](https://github.com/gitops-bridge-dev).
+This tutorial guides you through deploying an Amazon EKS cluster with addons configured via ArgoCD in a Multi-Cluster Hub-Spoke topology, employing the [GitOps Bridge Pattern](https://github.com/gitops-bridge-dev).
 
 <img src="https://raw.githubusercontent.com/aws-ia/terraform-aws-eks-blueprints/main/patterns/gitops/multi-cluster-hub-spoke-argocd/static/gitops-bridge-multi-cluster-hup-spoke.drawio.png" width=100%>
 
@@ -59,7 +59,20 @@ that temporary file with the `kubectl` configuration. This approach offers the
 advantage of not altering your existing `kubectl` context, allowing you to work
 in other terminal windows without interference.
 
-### Monitor GitOps Progress for Addons
+### Deploy ArgoCD Apps of ApplicationSets for Addons
+
+This command verifies the initial ArgoCD installation, ArgoCD will be re-configured when the addons are deployed and configured from git.
+```shell
+kubectl --context hub get all -n argocd
+```
+This command creates the application set manifest to deploy the addons.
+```shell
+kubectl --context hub apply -n argocd -f ../hub/bootstrap/addons.yaml
+```
+The application sets defined here will then deploy addons to any spoke clusters provisioned later using Terraform
+
+
+### Monitor GitOps Progress for Addons on Hub EKS Cluster
 
 Wait until all the ArgoCD applications' `HEALTH STATUS` is `Healthy`.
 Use `Ctrl+C` or `Cmd+C` to exit the `watch` command. ArgoCD Applications
@@ -97,23 +110,11 @@ echo "ArgoCD Password: $(kubectl --context hub get secrets argocd-initial-admin-
 echo "ArgoCD URL: https://$(kubectl --context hub get svc -n argocd argo-cd-argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
 ```
 
-## Verify that ArgoCD Service Accouts has the annotation for IRSA
-
-```shell
-kubectl --context hub get sa -n argocd argocd-application-controller -o json | jq '.metadata.annotations."eks.amazonaws.com/role-arn"'
-kubectl --context hub get sa -n argocd argocd-server  -o json | jq '.metadata.annotations."eks.amazonaws.com/role-arn"'
-```
-
-The output should match the `arn` for the IAM Role that will assume the IAM Role in spoke/remote clusters
-
-```text
-arn:aws:iam::0123456789:role/argocd-hub-0123abc..
-arn:aws:iam::0123456789:role/argocd-hub-0123abc..
-```
-
 ## Deploy the Spoke EKS Cluster
 
 Use the `deploy.sh` script to create terraform workspace, initialize Terraform, and deploy the EKS clusters:
+
+***You may want to create few spoke environments to validate multi-cluster hub spoke to avoid quota limits***
 
 ```shell
 cd ../spokes
@@ -164,15 +165,22 @@ The output have a section `awsAuthConfig` with the `clusterName` and the `roleAR
 
 ### Verify the Addons on Spoke Clusters
 
-Verify that the addons are ready:
+The addons on the spoke clusters are deployed using the Application Sets created on the EKS Hub Cluster. Verify that the addons are ready:
 
 ```shell
 for i in dev staging prod ; do echo $i && kubectl --context $i get deployment -n kube-system ; done
 ```
 
+### Deploy the sample application to EKS Spoke Clusters
+
+This command will deploy the application using kubectl to all clusters connected to the hub cluster, using the manifest files in [./hub/bootstrap/workloads.yaml](./hub/bootstrap/workloads.yaml).
+```shell
+kubectl --context hub apply -n argocd -f ../hub/bootstrap/workloads.yaml
+```
+
 ### Monitor GitOps Progress for Workloads from Hub Cluster (run on Hub Cluster context)
 
-Watch until **all* the Workloads ArgoCD Applications are `Healthy`
+Watch until all the Workloads ArgoCD Applications are `Healthy`
 
 ```shell
 kubectl --context hub get -n argocd applications -w
@@ -220,7 +228,7 @@ cd ../hub
 
 ## Fork GitOps Repositories
 
-To modify the `values.yaml` file or the helm chart version for addons, you'll need to fork tthe repository [aws-samples/eks-blueprints-add-ons](https://github.com/aws-samples/eks-blueprints-add-ons).
+To modify the `values.yaml` file or the helm chart version for addons, you'll need to fork the repository [aws-samples/eks-blueprints-add-ons](https://github.com/aws-samples/eks-blueprints-add-ons).
 
 After forking, update the following environment variables to point to your forks, replacing the default values.
 
